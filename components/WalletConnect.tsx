@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { addEvent, ActivityEvent } from "@/lib/activity";
 
 type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -11,6 +12,7 @@ type EthereumProvider = {
 export default function WalletConnect() {
   const [address, setAddress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [chainId, setChainId] = useState<number | null>(null);
 
   useEffect(() => {
     const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
@@ -20,14 +22,33 @@ export default function WalletConnect() {
       const next = typeof list[0] === "string" ? list[0] : null;
       setAddress(next);
     };
+    const handleChain = (id: unknown) => {
+      if (typeof id === "string") {
+        const parsed = id.startsWith("0x")
+          ? parseInt(id, 16)
+          : Number(id);
+        setChainId(Number.isFinite(parsed) ? parsed : null);
+      } else if (typeof id === "number") {
+        setChainId(id);
+      } else {
+        setChainId(null);
+      }
+    };
     ethereum
       .request({ method: "eth_accounts" })
       .then(handleAccounts)
       .catch(() => {});
+    ethereum
+      .request({ method: "eth_chainId" })
+      .then(handleChain)
+      .catch(() => {});
     const onAccountsChanged = (accounts: unknown) => handleAccounts(accounts);
+    const onChainChanged = (id: unknown) => handleChain(id);
     ethereum.on?.("accountsChanged", onAccountsChanged);
+    ethereum.on?.("chainChanged", onChainChanged);
     return () => {
       ethereum.removeListener?.("accountsChanged", onAccountsChanged);
+      ethereum.removeListener?.("chainChanged", onChainChanged);
     };
   }, []);
 
@@ -42,13 +63,46 @@ export default function WalletConnect() {
       const accounts = (await ethereum.request({
         method: "eth_requestAccounts",
       })) as string[];
-      setAddress(accounts?.[0] ?? null);
+      const nextAddress = accounts?.[0] ?? null;
+      setAddress(nextAddress);
+      if (nextAddress) {
+        const event: ActivityEvent = {
+          id: crypto.randomUUID(),
+          createdAt: Date.now(),
+          intentId: crypto.randomUUID(),
+          actor: nextAddress,
+          kind: "wallet.connect",
+          status: "success",
+          chains: chainId ? [chainId] : [],
+          token: "",
+          tx: {},
+          refs: {},
+          meta: {},
+        };
+        addEvent(event);
+      }
     } catch {
       setError("Connection rejected");
     }
   };
 
   const onDisconnect = () => {
+    if (address) {
+      const event: ActivityEvent = {
+        id: crypto.randomUUID(),
+        createdAt: Date.now(),
+        intentId: crypto.randomUUID(),
+        actor: address,
+        kind: "wallet.disconnect",
+        status: "success",
+        chains: chainId ? [chainId] : [],
+        token: "",
+        tx: {},
+        refs: {},
+        meta: {},
+      };
+      addEvent(event);
+    }
     setAddress(null);
   };
 
