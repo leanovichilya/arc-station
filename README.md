@@ -6,6 +6,14 @@
 pnpm install
 ```
 
+## Environment
+
+```bash
+cp .env.example .env
+```
+
+Set RPC URLs in `.env`.
+
 ## Dev
 
 ```bash
