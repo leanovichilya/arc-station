@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { addEvent, ActivityEvent } from "@/lib/activity";
+import { emitWalletState } from "@/lib/walletState";
 
 type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -65,6 +66,7 @@ export default function WalletConnect() {
       })) as string[];
       const nextAddress = accounts?.[0] ?? null;
       setAddress(nextAddress);
+      emitWalletState({ address: nextAddress, chainId });
       if (nextAddress) {
         const event: ActivityEvent = {
           id: crypto.randomUUID(),
@@ -103,6 +105,7 @@ export default function WalletConnect() {
       };
       addEvent(event);
     }
+    emitWalletState({ address: null, chainId });
     setAddress(null);
   };
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { onWalletState } from "@/lib/walletState";
 
 type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -40,9 +41,14 @@ export default function WalletStatus() {
       .request({ method: "eth_chainId" })
       .then(handleChain)
       .catch(() => {});
+    const unsubscribe = onWalletState((state) => {
+      setAddress(state.address);
+      setChainId(state.chainId);
+    });
     ethereum.on?.("accountsChanged", handleAccounts);
     ethereum.on?.("chainChanged", handleChain);
     return () => {
+      unsubscribe();
       ethereum.removeListener?.("accountsChanged", handleAccounts);
       ethereum.removeListener?.("chainChanged", handleChain);
     };
