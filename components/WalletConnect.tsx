@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { addEvent, ActivityEvent } from "@/lib/activity";
 import { emitWalletState } from "@/lib/walletState";
+import {
+  isWalletDisconnected,
+  setWalletDisconnected,
+} from "@/lib/walletSession";
 
 type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -19,6 +23,10 @@ export default function WalletConnect() {
     const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
     if (!ethereum) return;
     const handleAccounts = (accounts: unknown) => {
+      if (isWalletDisconnected()) {
+        setAddress(null);
+        return;
+      }
       const list = Array.isArray(accounts) ? accounts : [];
       const next = typeof list[0] === "string" ? list[0] : null;
       setAddress(next);
@@ -61,6 +69,7 @@ export default function WalletConnect() {
       return;
     }
     try {
+      setWalletDisconnected(false);
       const accounts = (await ethereum.request({
         method: "eth_requestAccounts",
       })) as string[];
@@ -105,6 +114,7 @@ export default function WalletConnect() {
       };
       addEvent(event);
     }
+    setWalletDisconnected(true);
     emitWalletState({ address: null, chainId });
     setAddress(null);
   };

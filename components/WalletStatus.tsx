@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { onWalletState } from "@/lib/walletState";
+import { isWalletDisconnected } from "@/lib/walletSession";
 
 type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -17,6 +18,10 @@ export default function WalletStatus() {
     const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
     if (!ethereum) return;
     const handleAccounts = (accounts: unknown) => {
+      if (isWalletDisconnected()) {
+        setAddress(null);
+        return;
+      }
       const list = Array.isArray(accounts) ? accounts : [];
       const next = typeof list[0] === "string" ? list[0] : null;
       setAddress(next);
