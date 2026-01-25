@@ -1,14 +1,23 @@
 export type ActivityEvent = {
   id: string;
-  label: string;
-  timestamp: number;
-  txHash?: string;
-  chainKey?: string;
+  createdAt: number;
+  intentId: string;
+  actor: string;
+  kind: string;
+  status: string;
+  chains: number[];
+  token: string;
+  tx: {
+    hash?: string;
+    chainId?: number;
+  };
+  refs: Record<string, string>;
+  meta: Record<string, string | number | boolean | null>;
 };
 
 const STORAGE_KEY = "arc-station-activity";
 
-export function getActivity(): ActivityEvent[] {
+export function listEvents(): ActivityEvent[] {
   if (typeof window === "undefined") return [];
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return [];
@@ -20,16 +29,13 @@ export function getActivity(): ActivityEvent[] {
   }
 }
 
-export function setActivity(events: ActivityEvent[]) {
+export function addEvent(event: ActivityEvent) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
+  const next = [event, ...listEvents()];
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
 }
 
-export function clearActivity() {
-  setActivity([]);
-}
-
-export function addActivity(event: ActivityEvent) {
-  const next = [event, ...getActivity()];
-  setActivity(next);
+export function clearEvents() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(STORAGE_KEY);
 }
