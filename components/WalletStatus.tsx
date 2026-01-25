@@ -62,7 +62,7 @@ export default function WalletStatus() {
   return (
     <div className="flex items-center gap-3 text-xs text-zinc-600">
       <span>{address ? "Connected" : "Not connected"}</span>
-      <span>Chain: {chainId ?? "-"}</span>
+      {address ? <span>Chain: {chainId ?? "-"}</span> : null}
       {short ? <span>{short}</span> : null}
     </div>
   );
