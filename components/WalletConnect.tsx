@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { addEvent, ActivityEvent } from "@/lib/activity";
+import { addEvent } from "@/lib/activity";
+import type { ActivityEvent } from "@/shared/types";
 import { emitWalletState } from "@/lib/walletState";
 import {
   isWalletDisconnected,
@@ -77,19 +78,20 @@ export default function WalletConnect() {
       setAddress(nextAddress);
       emitWalletState({ address: nextAddress, chainId });
       if (nextAddress) {
-        const event: ActivityEvent = {
+        const actor = nextAddress.toLowerCase();
+        const baseEvent: ActivityEvent = {
           id: crypto.randomUUID(),
-          createdAt: Date.now(),
+          createdAt: new Date().toISOString(),
+          actor,
+          app: "arc-stable-toolbox",
           intentId: crypto.randomUUID(),
-          actor: nextAddress,
-          kind: "wallet.connect",
-          status: "success",
-          chains: chainId ? [chainId] : [],
-          token: "",
-          tx: {},
-          refs: {},
-          meta: {},
+          kind: "contractCall",
+          status: "completed",
+          signals: { items: ["wallet.connect"] },
         };
+        const event: ActivityEvent = chainId
+          ? { ...baseEvent, chains: { sourceChainId: chainId } }
+          : baseEvent;
         addEvent(event);
       }
     } catch {
@@ -99,19 +101,20 @@ export default function WalletConnect() {
 
   const onDisconnect = () => {
     if (address) {
-      const event: ActivityEvent = {
+      const actor = address.toLowerCase();
+      const baseEvent: ActivityEvent = {
         id: crypto.randomUUID(),
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
+        actor,
+        app: "arc-stable-toolbox",
         intentId: crypto.randomUUID(),
-        actor: address,
-        kind: "wallet.disconnect",
-        status: "success",
-        chains: chainId ? [chainId] : [],
-        token: "",
-        tx: {},
-        refs: {},
-        meta: {},
+        kind: "contractCall",
+        status: "completed",
+        signals: { items: ["wallet.disconnect"] },
       };
+      const event: ActivityEvent = chainId
+        ? { ...baseEvent, chains: { sourceChainId: chainId } }
+        : baseEvent;
       addEvent(event);
     }
     setWalletDisconnected(true);
