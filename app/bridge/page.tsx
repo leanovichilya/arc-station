@@ -266,6 +266,11 @@ export default function BridgePage() {
               <span>Estimated time</span>
               <span>~5-15 min</span>
             </div>
+            {!isConnected ? (
+              <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                Wallet disconnected — connect to continue.
+              </div>
+            ) : null}
             <button
               className="h-10 w-full rounded bg-zinc-900 text-sm font-medium text-white"
               onClick={onStart}
@@ -277,6 +282,7 @@ export default function BridgePage() {
                   ? "Bridge in progress"
                   : "Start bridge"}
             </button>
+            <div className="text-xs text-zinc-500">Status: {progressLabel}</div>
           </div>
         </div>
 
