@@ -2,7 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import WalletConnect from "@/components/WalletConnect";
+import { addEvent } from "@/lib/activity";
 import { CHAINS } from "@/lib/chains";
+import { onWalletState } from "@/lib/walletState";
+import { isWalletDisconnected } from "@/lib/walletSession";
+import type { ActivityEvent, ActivityStatus } from "@/shared/types";
+
+type EthereumProvider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+  on?: (event: string, handler: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, handler: (...args: unknown[]) => void) => void;
+};
 
 export default function BridgePage() {
   const storageKey = "arc-bridge-progress";
@@ -14,39 +24,44 @@ export default function BridgePage() {
   const [amount, setAmount] = useState("");
   const [stepIndex, setStepIndex] = useState<number | null>(null);
   const [transferId, setTransferId] = useState<string | null>(null);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = localStorage.getItem(storageKey);
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw) as {
-        sourceChainId?: number;
-        destChainId?: number;
-        amount?: string;
-        stepIndex?: number | null;
-        transferId?: string | null;
-      };
-      if (typeof parsed.sourceChainId === "number") {
-        setSourceChainId(parsed.sourceChainId);
-      }
-      if (typeof parsed.destChainId === "number") {
-        setDestChainId(parsed.destChainId);
-      }
-      if (typeof parsed.amount === "string") {
-        setAmount(parsed.amount);
-      }
-      if (typeof parsed.stepIndex === "number" || parsed.stepIndex === null) {
-        setStepIndex(parsed.stepIndex ?? null);
-      }
-      if (typeof parsed.transferId === "string" || parsed.transferId === null) {
-        setTransferId(parsed.transferId ?? null);
-      }
-    } catch {}
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as {
+          sourceChainId?: number;
+          destChainId?: number;
+          amount?: string;
+          stepIndex?: number | null;
+          transferId?: string | null;
+        };
+        if (typeof parsed.sourceChainId === "number") {
+          setSourceChainId(parsed.sourceChainId);
+        }
+        if (typeof parsed.destChainId === "number") {
+          setDestChainId(parsed.destChainId);
+        }
+        if (typeof parsed.amount === "string") {
+          setAmount(parsed.amount);
+        }
+        if (typeof parsed.stepIndex === "number" || parsed.stepIndex === null) {
+          setStepIndex(parsed.stepIndex ?? null);
+        }
+        if (typeof parsed.transferId === "string" || parsed.transferId === null) {
+          setTransferId(parsed.transferId ?? null);
+        }
+      } catch {}
+    }
+    setIsHydrated(true);
   }, [storageKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!isHydrated) return;
     const payload = {
       sourceChainId,
       destChainId,
@@ -55,7 +70,39 @@ export default function BridgePage() {
       transferId,
     };
     localStorage.setItem(storageKey, JSON.stringify(payload));
-  }, [amount, destChainId, sourceChainId, stepIndex, storageKey, transferId]);
+  }, [
+    amount,
+    destChainId,
+    isHydrated,
+    sourceChainId,
+    stepIndex,
+    storageKey,
+    transferId,
+  ]);
+
+  useEffect(() => {
+    const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
+    if (!ethereum) return;
+    const handleAccounts = (accounts: unknown) => {
+      if (isWalletDisconnected()) {
+        setWalletAddress(null);
+        return;
+      }
+      const list = Array.isArray(accounts) ? accounts : [];
+      const next = typeof list[0] === "string" ? list[0] : null;
+      setWalletAddress(next);
+    };
+    ethereum
+      .request({ method: "eth_accounts" })
+      .then(handleAccounts)
+      .catch(() => {});
+    const unsubscribe = onWalletState((state) => setWalletAddress(state.address));
+    ethereum.on?.("accountsChanged", handleAccounts);
+    return () => {
+      unsubscribe();
+      ethereum.removeListener?.("accountsChanged", handleAccounts);
+    };
+  }, []);
 
   const steps = [
     {
@@ -82,22 +129,68 @@ export default function BridgePage() {
     return `Step ${stepIndex + 1} of ${steps.length}`;
   }, [stepIndex, steps.length]);
 
+  const isConnected = Boolean(walletAddress);
+  const hasActiveFlow = stepIndex !== null && stepIndex < steps.length;
+  const isComplete = stepIndex !== null && stepIndex >= steps.length;
+
+  const ensureIntentId = () => {
+    if (transferId) return transferId;
+    const next = crypto.randomUUID();
+    setTransferId(next);
+    return next;
+  };
+
+  const recordBridgeEvent = (status: ActivityStatus, intentId: string) => {
+    if (!walletAddress) return;
+    const actor = walletAddress.toLowerCase();
+    const amountDigits = amount.replace(/\D/g, "");
+    const event: ActivityEvent = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      actor,
+      app: "arc-stable-toolbox",
+      intentId,
+      kind: "bridge",
+      status,
+      chains: {
+        sourceChainId,
+        destChainId,
+      },
+      ...(amountDigits
+        ? {
+            token: {
+              symbol: "USDC",
+              amount: amountDigits,
+            },
+          }
+        : {}),
+    };
+    addEvent(event);
+  };
+
   const onStart = () => {
-    if (stepIndex === null) {
-      setStepIndex(0);
-    }
-    if (!transferId) {
-      setTransferId(crypto.randomUUID());
-    }
+    if (!isConnected) return;
+    if (hasActiveFlow) return;
+    const intentId = crypto.randomUUID();
+    setTransferId(intentId);
+    setStepIndex(0);
+    recordBridgeEvent("started", intentId);
   };
 
   const onNext = () => {
-    if (stepIndex === null) {
-      setStepIndex(0);
-      return;
-    }
+    if (!isConnected) return;
+    if (!hasActiveFlow) return;
     if (stepIndex < steps.length) {
+      const statusByStep: ActivityStatus[] = [
+        "approved",
+        "submitted",
+        "attested",
+        "completed",
+      ];
+      const nextStatus = statusByStep[stepIndex] ?? "completed";
       setStepIndex(stepIndex + 1);
+      const intentId = ensureIntentId();
+      recordBridgeEvent(nextStatus, intentId);
     }
   };
 
@@ -176,8 +269,13 @@ export default function BridgePage() {
             <button
               className="h-10 w-full rounded bg-zinc-900 text-sm font-medium text-white"
               onClick={onStart}
+              disabled={!isConnected || hasActiveFlow}
             >
-              Start bridge
+              {!isConnected
+                ? "Connect wallet to start"
+                : hasActiveFlow
+                  ? "Bridge in progress"
+                  : "Start bridge"}
             </button>
           </div>
         </div>
@@ -236,6 +334,7 @@ export default function BridgePage() {
             <button
               className="h-9 rounded border border-zinc-300 px-3 text-xs"
               onClick={onNext}
+              disabled={!isConnected || !hasActiveFlow || isComplete}
             >
               Next step
             </button>
