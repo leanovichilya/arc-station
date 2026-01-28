@@ -10,6 +10,7 @@ import {
   getTokenMessengerV2Address,
 } from "@/lib/bridgeKit";
 import { CHAINS } from "@/lib/chains";
+import { loadSelectedChain, onSelectedChain } from "@/lib/selectedChain";
 import { getUsdcToken } from "@/lib/tokens";
 import { onWalletState } from "@/lib/walletState";
 import { isWalletDisconnected } from "@/lib/walletSession";
@@ -31,6 +32,12 @@ const ERC20_ABI = [
     outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
+
+const pickAlternateChainId = (fromChainId: number, currentDest: number) => {
+  if (currentDest && currentDest !== fromChainId) return currentDest;
+  const fallback = CHAINS.find((chain) => chain.chainId !== fromChainId);
+  return fallback?.chainId ?? fromChainId;
+};
 
 export default function BridgePage() {
   const storageKey = "arc-bridge-progress";
@@ -56,6 +63,25 @@ export default function BridgePage() {
     null
   );
   const [walletChainId, setWalletChainId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const saved = loadSelectedChain();
+    if (saved && saved !== sourceChainId) {
+      setSourceChainId(saved);
+      setDestChainId((prev) => pickAlternateChainId(saved, prev));
+    }
+    const unsubscribe = onSelectedChain((chainId) => {
+      setSourceChainId(chainId);
+      setDestChainId((prev) => pickAlternateChainId(chainId, prev));
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    setDestChainId((prev) => pickAlternateChainId(sourceChainId, prev));
+  }, [sourceChainId]);
 
   const parseUsdcToBaseUnits = (value: string) => {
     const trimmed = value.trim();

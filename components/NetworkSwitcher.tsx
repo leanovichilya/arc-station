@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { CHAINS } from "@/lib/chains";
+import {
+  emitSelectedChain,
+  loadSelectedChain,
+  onSelectedChain,
+} from "@/lib/selectedChain";
 import { onWalletState } from "@/lib/walletState";
 import { isWalletDisconnected } from "@/lib/walletSession";
 
@@ -26,8 +31,22 @@ export default function NetworkSwitcher() {
   const [showMismatchWarning, setShowMismatchWarning] = useState(false);
 
   useEffect(() => {
+    const saved = loadSelectedChain();
+    if (saved && CHAINS.some((chain) => chain.chainId === saved)) {
+      setTargetChainId(saved);
+      emitSelectedChain(saved);
+    } else if (DEFAULT_CHAIN_ID) {
+      emitSelectedChain(DEFAULT_CHAIN_ID);
+    }
+    const unsubscribeSelected = onSelectedChain((chainId) => {
+      setTargetChainId(chainId);
+    });
     const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
-    if (!ethereum) return;
+    if (!ethereum) {
+      return () => {
+        unsubscribeSelected();
+      };
+    }
     const handleAccounts = (accounts: unknown) => {
       if (isWalletDisconnected()) {
         setAddress(null);
@@ -63,6 +82,7 @@ export default function NetworkSwitcher() {
     ethereum.on?.("chainChanged", handleChain);
     return () => {
       unsubscribe();
+      unsubscribeSelected();
       ethereum.removeListener?.("accountsChanged", handleAccounts);
       ethereum.removeListener?.("chainChanged", handleChain);
     };
@@ -132,6 +152,7 @@ export default function NetworkSwitcher() {
     }
     setShowMismatchWarning(false);
     setTargetChainId(pendingChainId);
+    emitSelectedChain(pendingChainId);
     await onSwitch(pendingChainId);
     setPendingChainId(null);
     setShowConfirm(false);
