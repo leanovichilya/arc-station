@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { onWalletState } from "@/lib/walletState";
-import { isWalletDisconnected } from "@/lib/walletSession";
+import { emitWalletState, onWalletState } from "@/lib/walletState";
+import { isWalletDisconnected, setWalletDisconnected } from "@/lib/walletSession";
 
 type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -13,6 +13,7 @@ type EthereumProvider = {
 export default function WalletStatus() {
   const [address, setAddress] = useState<string | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
@@ -59,16 +60,52 @@ export default function WalletStatus() {
     };
   }, []);
 
-  const short =
-    address && address.length > 10
-      ? `${address.slice(0, 6)}...${address.slice(-4)}`
-      : address;
+  const onConnect = async () => {
+    setError(null);
+    const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
+    if (!ethereum) {
+      setError("No wallet found");
+      return;
+    }
+    try {
+      setWalletDisconnected(false);
+      const accounts = (await ethereum.request({
+        method: "eth_requestAccounts",
+      })) as string[];
+      const nextAddress = accounts?.[0] ?? null;
+      setAddress(nextAddress);
+      emitWalletState({ address: nextAddress, chainId });
+    } catch {
+      setError("Connection rejected");
+    }
+  };
+
+  const onDisconnect = () => {
+    setWalletDisconnected(true);
+    emitWalletState({ address: null, chainId });
+    setAddress(null);
+  };
 
   return (
-    <div className="flex items-center gap-3 text-xs text-zinc-600">
-      <span>{address ? "Connected" : "Not connected"}</span>
-      {address ? <span>Chain: {chainId ?? "-"}</span> : null}
-      {short ? <span>{short}</span> : null}
+    <div className="flex items-center gap-2 text-xs text-zinc-600">
+      {address ? (
+        <button
+          type="button"
+          className="h-8 rounded border border-zinc-300 px-3 text-xs text-zinc-900"
+          onClick={onDisconnect}
+        >
+          Disconnect
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="h-8 rounded bg-zinc-900 px-3 text-xs font-medium text-white"
+          onClick={onConnect}
+        >
+          Connect wallet
+        </button>
+      )}
+      {error ? <span className="text-red-600">{error}</span> : null}
     </div>
   );
 }

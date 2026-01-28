@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import NetworkSwitcher from "@/components/NetworkSwitcher";
 import WalletStatus from "@/components/WalletStatus";
 import "./globals.css";
 
@@ -24,7 +25,10 @@ export default function RootLayout({
               <Link href="/deploy">Deploy</Link>
               <Link href="/activity">Activity</Link>
             </div>
-            <WalletStatus />
+            <div className="flex items-center gap-4">
+              <NetworkSwitcher />
+              <WalletStatus />
+            </div>
           </nav>
         </header>
         <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>

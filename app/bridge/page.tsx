@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import WalletConnect from "@/components/WalletConnect";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { createPublicClient, custom, formatUnits } from "viem";
 import { addEvent } from "@/lib/activity";
 import {
   createBrowserAdapter,
@@ -10,6 +10,7 @@ import {
   getTokenMessengerV2Address,
 } from "@/lib/bridgeKit";
 import { CHAINS } from "@/lib/chains";
+import { getUsdcToken } from "@/lib/tokens";
 import { onWalletState } from "@/lib/walletState";
 import { isWalletDisconnected } from "@/lib/walletSession";
 import type { ActivityEvent, ActivityStatus } from "@/shared/types";
@@ -20,6 +21,16 @@ type EthereumProvider = {
   on?: (event: string, handler: (...args: unknown[]) => void) => void;
   removeListener?: (event: string, handler: (...args: unknown[]) => void) => void;
 };
+
+const ERC20_ABI = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
 
 export default function BridgePage() {
   const storageKey = "arc-bridge-progress";
@@ -36,6 +47,29 @@ export default function BridgePage() {
   const [isBridging, setIsBridging] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [failedStep, setFailedStep] = useState<number | null>(null);
+  const [balanceBaseUnits, setBalanceBaseUnits] = useState<bigint | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [amountPercent, setAmountPercent] = useState(0);
+  const isConnected = Boolean(walletAddress);
+  const [balanceSource, setBalanceSource] = useState<"erc20" | "native" | null>(
+    null
+  );
+  const [walletChainId, setWalletChainId] = useState<number | null>(null);
+
+  const parseUsdcToBaseUnits = (value: string) => {
+    const trimmed = value.trim();
+    if (!/^\d+(\.\d+)?$/.test(trimmed)) return "";
+    const [whole, fraction = ""] = trimmed.split(".");
+    const padded = `${fraction}000000`.slice(0, 6);
+    const combined = `${whole}${padded}`.replace(/^0+(?=\d)/, "");
+    return combined === "" ? "0" : combined;
+  };
+
+  const formatUsdcBaseUnits = (value: bigint) => {
+    const formatted = formatUnits(value, 6);
+    return formatted.replace(/\.?0+$/, "");
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -48,7 +82,6 @@ export default function BridgePage() {
           amount?: string;
           stepIndex?: number | null;
           transferId?: string | null;
-          failedStep?: number | null;
         };
         if (typeof parsed.sourceChainId === "number") {
           setSourceChainId(parsed.sourceChainId);
@@ -65,9 +98,6 @@ export default function BridgePage() {
         if (typeof parsed.transferId === "string" || parsed.transferId === null) {
           setTransferId(parsed.transferId ?? null);
         }
-        if (typeof parsed.failedStep === "number" || parsed.failedStep === null) {
-          setFailedStep(parsed.failedStep ?? null);
-        }
       } catch {}
     }
     setIsHydrated(true);
@@ -82,14 +112,12 @@ export default function BridgePage() {
       amount,
       stepIndex,
       transferId,
-      failedStep,
     };
     localStorage.setItem(storageKey, JSON.stringify(payload));
   }, [
     amount,
     destChainId,
     isHydrated,
-    failedStep,
     sourceChainId,
     stepIndex,
     storageKey,
@@ -112,13 +140,124 @@ export default function BridgePage() {
       .request({ method: "eth_accounts" })
       .then(handleAccounts)
       .catch(() => {});
+    ethereum
+      .request({ method: "eth_chainId" })
+      .then((id) => {
+        if (typeof id === "string") {
+          const parsed = id.startsWith("0x") ? parseInt(id, 16) : Number(id);
+          setWalletChainId(Number.isFinite(parsed) ? parsed : null);
+        } else if (typeof id === "number") {
+          setWalletChainId(id);
+        }
+      })
+      .catch(() => {});
     const unsubscribe = onWalletState((state) => setWalletAddress(state.address));
     ethereum.on?.("accountsChanged", handleAccounts);
+    const onChainChanged = (id: unknown) => {
+      if (typeof id === "string") {
+        const parsed = id.startsWith("0x") ? parseInt(id, 16) : Number(id);
+        setWalletChainId(Number.isFinite(parsed) ? parsed : null);
+      } else if (typeof id === "number") {
+        setWalletChainId(id);
+      } else {
+        setWalletChainId(null);
+      }
+    };
+    ethereum.on?.("chainChanged", onChainChanged);
     return () => {
       unsubscribe();
       ethereum.removeListener?.("accountsChanged", handleAccounts);
+      ethereum.removeListener?.("chainChanged", onChainChanged);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isConnected || !walletAddress) {
+      setBalanceBaseUnits(null);
+      setBalanceError(null);
+      setBalanceLoading(false);
+      setBalanceSource(null);
+      return;
+    }
+    if (!walletChainId || walletChainId !== sourceChainId) {
+      setBalanceBaseUnits(null);
+      setBalanceError(`Switch wallet to ${sourceChainName} to load balance`);
+      setBalanceLoading(false);
+      setBalanceSource(null);
+      return;
+    }
+    const token = getUsdcToken(sourceChainId);
+    const rpcUrl = CHAINS.find((chain) => chain.chainId === sourceChainId)?.rpcUrl;
+    if (!token) {
+      setBalanceBaseUnits(null);
+      setBalanceError("USDC address not configured");
+      return;
+    }
+    let active = true;
+    setBalanceLoading(true);
+    setBalanceError(null);
+    setBalanceSource(null);
+    const load = async () => {
+      const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
+      if (!ethereum) {
+        setBalanceBaseUnits(null);
+        setBalanceError("Wallet not available");
+        setBalanceLoading(false);
+        return;
+      }
+      const transport = custom(ethereum);
+      const client = createPublicClient({ transport });
+      try {
+        const value = (await client.readContract({
+          address: token.address,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [walletAddress],
+        })) as bigint;
+        if (!active) return;
+        setBalanceBaseUnits(value);
+        setBalanceSource("erc20");
+      } catch {
+        if (!active) return;
+        if (sourceChainId === 5042002) {
+          try {
+            const native = await client.getBalance({
+              address: walletAddress,
+            });
+            const scaled = native / 1_000_000_000_000n;
+            if (!active) return;
+            setBalanceBaseUnits(scaled);
+            setBalanceSource("native");
+            return;
+          } catch {}
+        }
+        setBalanceBaseUnits(null);
+        setBalanceError("Failed to load balance from wallet");
+      } finally {
+        if (!active) return;
+        setBalanceLoading(false);
+      }
+    };
+    load();
+    return () => {
+      active = false;
+    };
+  }, [isConnected, sourceChainId, walletAddress, walletChainId]);
+
+  useEffect(() => {
+    if (!balanceBaseUnits || balanceBaseUnits === 0n) {
+      setAmountPercent(0);
+      return;
+    }
+    const baseUnits = parseUsdcToBaseUnits(amount);
+    if (!baseUnits) {
+      setAmountPercent(0);
+      return;
+    }
+    const percent = Number((BigInt(baseUnits) * 100n) / balanceBaseUnits);
+    const clamped = Math.max(0, Math.min(100, percent));
+    setAmountPercent(clamped);
+  }, [amount, balanceBaseUnits]);
 
   const steps = [
     {
@@ -146,7 +285,6 @@ export default function BridgePage() {
     return `Step ${stepIndex + 1} of ${steps.length}`;
   }, [failedStep, stepIndex, steps.length]);
 
-  const isConnected = Boolean(walletAddress);
   const isFailed = failedStep !== null;
   const hasActiveFlow = stepIndex !== null && stepIndex < steps.length && !isFailed;
   const isBusy = isBridging || hasActiveFlow;
@@ -154,15 +292,12 @@ export default function BridgePage() {
     CHAINS.find((chain) => chain.chainId === sourceChainId)?.name ??
     "source chain";
   const tokenMessengerAddress = getTokenMessengerV2Address(sourceChainId);
-
-  const toUsdcBaseUnits = (value: string) => {
-    const trimmed = value.trim();
-    if (!/^\d+(\.\d+)?$/.test(trimmed)) return "";
-    const [whole, fraction = ""] = trimmed.split(".");
-    const padded = `${fraction}000000`.slice(0, 6);
-    const combined = `${whole}${padded}`.replace(/^0+(?=\d)/, "");
-    return combined === "" ? "0" : combined;
-  };
+  const balanceLabel = useMemo(() => {
+    if (balanceLoading) return "Loading...";
+    if (balanceError) return balanceError;
+    if (balanceBaseUnits === null) return "-";
+    return `${formatUsdcBaseUnits(balanceBaseUnits)} USDC`;
+  }, [balanceBaseUnits, balanceError, balanceLoading]);
 
   const recordBridgeEvent = (
     status: ActivityStatus,
@@ -176,7 +311,7 @@ export default function BridgePage() {
   ) => {
     if (!walletAddress) return;
     const actor = walletAddress.toLowerCase();
-    const amountBaseUnits = toUsdcBaseUnits(amount);
+    const amountBaseUnits = parseUsdcToBaseUnits(amount);
     const txPayload = txInfo
       ? {
           ...(txInfo.sourceTxHash ? { sourceTxHash: txInfo.sourceTxHash } : {}),
@@ -239,11 +374,12 @@ export default function BridgePage() {
       return;
     }
     const amountValue = amount.trim();
-    const amountBaseUnits = toUsdcBaseUnits(amountValue);
+    const amountBaseUnits = parseUsdcToBaseUnits(amountValue);
     if (!amountBaseUnits || amountBaseUnits === "0") {
       setBridgeError("Enter a valid amount");
       return;
     }
+    const normalizedAmount = formatUsdcBaseUnits(BigInt(amountBaseUnits));
     const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
     if (!ethereum) {
       setBridgeError("No wallet found");
@@ -311,7 +447,7 @@ export default function BridgePage() {
       const result = await kit.bridge({
         from: { adapter, chain: fromChain },
         to: { adapter, chain: toChain },
-        amount: amountValue,
+        amount: normalizedAmount,
       });
       if (result?.state === "error") {
         setFailedStep(lastStepIndex);
@@ -336,9 +472,25 @@ export default function BridgePage() {
     setBridgeError(null);
     setFailedStep(null);
     setIsBridging(false);
+    setAmountPercent(0);
     if (typeof window !== "undefined") {
       localStorage.removeItem(storageKey);
     }
+  };
+
+  const onPercentChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextPercent = Number(event.target.value);
+    setAmountPercent(nextPercent);
+    if (!balanceBaseUnits) {
+      return;
+    }
+    const nextValue = (balanceBaseUnits * BigInt(nextPercent)) / 100n;
+    setAmount(formatUsdcBaseUnits(nextValue));
+  };
+
+  const onUseMax = () => {
+    if (!balanceBaseUnits) return;
+    setAmount(formatUsdcBaseUnits(balanceBaseUnits));
   };
 
   return (
@@ -350,7 +502,6 @@ export default function BridgePage() {
             Move USDC between networks using Circle CCTP.
           </p>
         </div>
-        <WalletConnect />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
@@ -401,6 +552,51 @@ export default function BridgePage() {
                 <span className="text-xs text-zinc-500">USDC</span>
               </div>
             </label>
+            <div className="space-y-2 md:col-span-2">
+              <div className="flex items-center justify-between text-xs text-zinc-500">
+                <span>Balance: {balanceLabel}</span>
+                <button
+                  className="rounded border border-zinc-300 px-2 py-1 text-[11px] uppercase"
+                  onClick={onUseMax}
+                  type="button"
+                  disabled={!balanceBaseUnits || isBusy}
+                >
+                  Max
+                </button>
+              </div>
+              <input
+                className="w-full accent-zinc-900"
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={amountPercent}
+                onChange={onPercentChange}
+                disabled={!balanceBaseUnits || isBusy}
+                list="bridge-amount-marks"
+              />
+              <datalist id="bridge-amount-marks">
+                <option value="0" label="0%" />
+                <option value="25" label="25%" />
+                <option value="50" label="50%" />
+                <option value="75" label="75%" />
+                <option value="100" label="100%" />
+              </datalist>
+              <div className="flex justify-between text-[11px] text-zinc-500">
+                <span>0%</span>
+                <span>25%</span>
+                <span>50%</span>
+                <span>75%</span>
+                <span>100%</span>
+              </div>
+              {balanceError ? (
+                <div className="text-[11px] text-amber-700">{balanceError}</div>
+              ) : balanceSource === "native" ? (
+                <div className="text-[11px] text-amber-700">
+                  Using native Arc balance (converted to 6 decimals).
+                </div>
+              ) : null}
+            </div>
           </div>
 
           <div className="space-y-3">
