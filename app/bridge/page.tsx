@@ -558,11 +558,13 @@ export default function BridgePage() {
                 onChange={(event) => setDestChainId(Number(event.target.value))}
                 disabled={isBusy}
               >
-                {CHAINS.map((chain) => (
-                  <option key={chain.chainId} value={chain.chainId}>
-                    {chain.name}
-                  </option>
-                ))}
+                {CHAINS.filter((chain) => chain.chainId !== sourceChainId).map(
+                  (chain) => (
+                    <option key={chain.chainId} value={chain.chainId}>
+                      {chain.name}
+                    </option>
+                  )
+                )}
               </select>
             </label>
             <label className="space-y-2 text-sm md:col-span-2">
