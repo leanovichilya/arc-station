@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { createPublicClient, custom, formatUnits } from "viem";
+import { createPublicClient, custom, formatUnits, getAddress, http } from "viem";
 import { addEvent } from "@/lib/activity";
 import {
   createBrowserAdapter,
@@ -57,6 +57,7 @@ export default function BridgePage() {
   const [balanceBaseUnits, setBalanceBaseUnits] = useState<bigint | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [balanceWarning, setBalanceWarning] = useState<string | null>(null);
   const [balanceSwitchError, setBalanceSwitchError] = useState<string | null>(
     null
   );
@@ -67,6 +68,9 @@ export default function BridgePage() {
     null
   );
   const [walletChainId, setWalletChainId] = useState<number | null>(null);
+  const sourceChainName =
+    CHAINS.find((chain) => chain.chainId === sourceChainId)?.name ??
+    "source chain";
 
   useEffect(() => {
     const saved = loadSelectedChain();
@@ -181,7 +185,10 @@ export default function BridgePage() {
         }
       })
       .catch(() => {});
-    const unsubscribe = onWalletState((state) => setWalletAddress(state.address));
+    const unsubscribe = onWalletState((state) => {
+      setWalletAddress(state.address);
+      setWalletChainId(state.chainId);
+    });
     ethereum.on?.("accountsChanged", handleAccounts);
     const onChainChanged = (id: unknown) => {
       if (typeof id === "string") {
@@ -205,16 +212,9 @@ export default function BridgePage() {
     if (!isConnected || !walletAddress) {
       setBalanceBaseUnits(null);
       setBalanceError(null);
+      setBalanceWarning(null);
       setBalanceLoading(false);
       setBalanceSource(null);
-      return;
-    }
-    if (!walletChainId || walletChainId !== sourceChainId) {
-      setBalanceBaseUnits(null);
-      setBalanceError(`Switch wallet to ${sourceChainName} to load balance`);
-      setBalanceLoading(false);
-      setBalanceSource(null);
-      setBalanceSwitchError(null);
       return;
     }
     const token = getUsdcToken(sourceChainId);
@@ -226,9 +226,10 @@ export default function BridgePage() {
     }
     let active = true;
     setBalanceLoading(true);
-      setBalanceError(null);
-      setBalanceSwitchError(null);
-      setBalanceSource(null);
+    setBalanceError(null);
+    setBalanceWarning(null);
+    setBalanceSwitchError(null);
+    setBalanceSource(null);
     const load = async () => {
       const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
       if (!ethereum) {
@@ -237,34 +238,62 @@ export default function BridgePage() {
         setBalanceLoading(false);
         return;
       }
-      const transport = custom(ethereum);
-      const client = createPublicClient({ transport });
+      let currentChainId: number | null = null;
       try {
-        const value = (await client.readContract({
-          address: token.address,
+        const id = await ethereum.request({ method: "eth_chainId" });
+        if (typeof id === "string") {
+          const parsed = id.startsWith("0x") ? parseInt(id, 16) : Number(id);
+          currentChainId = Number.isFinite(parsed) ? parsed : null;
+        } else if (typeof id === "number") {
+          currentChainId = id;
+        }
+        if (currentChainId !== walletChainId) {
+          setWalletChainId(currentChainId);
+        }
+      } catch {
+        currentChainId = walletChainId;
+      }
+      const needsSwitch =
+        !currentChainId || currentChainId !== sourceChainId;
+      if (needsSwitch) {
+        setBalanceWarning(`Switch wallet to ${sourceChainName} to load balance`);
+      }
+
+      const readViaRpc = async () => {
+        if (!rpcUrl) {
+          throw new Error("RPC URL not configured");
+        }
+        const tokenAddress = getAddress(token.address);
+        const accountAddress = getAddress(walletAddress);
+        const rpcClient = createPublicClient({ transport: http(rpcUrl) });
+        const value = (await rpcClient.readContract({
+          address: tokenAddress,
           abi: ERC20_ABI,
           functionName: "balanceOf",
-          args: [walletAddress],
+          args: [accountAddress],
         })) as bigint;
+        return value;
+      };
+
+      try {
+        const value = await readViaRpc();
         if (!active) return;
         setBalanceBaseUnits(value);
         setBalanceSource("erc20");
-      } catch {
+        return;
+      } catch (error) {
         if (!active) return;
-        if (sourceChainId === 5042002) {
-          try {
-            const native = await client.getBalance({
-              address: walletAddress,
-            });
-            const scaled = native / 1_000_000_000_000n;
-            if (!active) return;
-            setBalanceBaseUnits(scaled);
-            setBalanceSource("native");
-            return;
-          } catch {}
+        if (error instanceof Error && error.message === "RPC URL not configured") {
+          setBalanceError("RPC URL not configured");
+          setBalanceLoading(false);
+          return;
         }
+        const message =
+          error instanceof Error && error.message
+            ? `RPC error: ${error.message}`
+            : "Failed to load balance from RPC";
+        setBalanceError(message);
         setBalanceBaseUnits(null);
-        setBalanceError("Failed to load balance from wallet");
       } finally {
         if (!active) return;
         setBalanceLoading(false);
@@ -274,7 +303,7 @@ export default function BridgePage() {
     return () => {
       active = false;
     };
-  }, [isConnected, sourceChainId, walletAddress, walletChainId]);
+  }, [isConnected, sourceChainId, walletAddress, walletChainId, sourceChainName]);
 
   useEffect(() => {
     if (!balanceBaseUnits || balanceBaseUnits === 0n) {
@@ -320,9 +349,6 @@ export default function BridgePage() {
   const isFailed = failedStep !== null;
   const hasActiveFlow = stepIndex !== null && stepIndex < steps.length && !isFailed;
   const isBusy = isBridging || hasActiveFlow;
-  const sourceChainName =
-    CHAINS.find((chain) => chain.chainId === sourceChainId)?.name ??
-    "source chain";
   const tokenMessengerAddress = getTokenMessengerV2Address(sourceChainId);
   const balanceLabel = useMemo(() => {
     if (balanceLoading) return "Loading...";
@@ -651,7 +677,7 @@ export default function BridgePage() {
                 <span>75%</span>
                 <span>100%</span>
               </div>
-              {balanceError ? (
+              {balanceWarning ? (
                 <div className="space-y-1 text-[11px] text-amber-700">
                   <div className="flex flex-wrap items-center gap-2">
                     <button
@@ -676,6 +702,9 @@ export default function BridgePage() {
                 <div className="text-[11px] text-amber-700">
                   Using native Arc balance (converted to 6 decimals).
                 </div>
+              ) : null}
+              {balanceError ? (
+                <div className="text-[11px] text-amber-700">{balanceError}</div>
               ) : null}
             </div>
           </div>
