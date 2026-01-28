@@ -68,14 +68,8 @@ export default function NetworkSwitcher() {
     };
   }, []);
 
-  const targetChain = targetChainId
-    ? CHAINS.find((chain) => chain.chainId === targetChainId)
-    : null;
   const pendingChain = pendingChainId
     ? CHAINS.find((chain) => chain.chainId === pendingChainId)
-    : null;
-  const walletChain = walletChainId
-    ? CHAINS.find((chain) => chain.chainId === walletChainId)
     : null;
   const isConnected = Boolean(address);
   const isMismatch =
@@ -168,13 +162,6 @@ export default function NetworkSwitcher() {
             </option>
           ))}
         </select>
-        {isConnected ? (
-          <span className="text-zinc-500">
-            Wallet: {walletChain?.name ?? `Chain ${walletChainId ?? "-"}`}
-          </span>
-        ) : (
-          <span className="text-zinc-500">Wallet: -</span>
-        )}
       </div>
       {error ? <span className="text-red-600">{error}</span> : null}
       {showConfirm ? (

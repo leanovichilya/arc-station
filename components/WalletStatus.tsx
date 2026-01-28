@@ -14,6 +14,7 @@ export default function WalletStatus() {
   const [address, setAddress] = useState<string | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
@@ -86,8 +87,31 @@ export default function WalletStatus() {
     setAddress(null);
   };
 
+  const onCopy = async () => {
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setError("Copy failed");
+    }
+  };
+
   return (
     <div className="flex items-center gap-2 text-xs text-zinc-600">
+      <span className="font-mono text-zinc-900">
+        {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "-"}
+      </span>
+      {address ? (
+        <button
+          type="button"
+          className="h-8 rounded border border-zinc-300 px-2 text-xs text-zinc-900"
+          onClick={onCopy}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      ) : null}
       {address ? (
         <button
           type="button"

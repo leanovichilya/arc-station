@@ -26,8 +26,8 @@ export default function RootLayout({
               <Link href="/activity">Activity</Link>
             </div>
             <div className="flex items-center gap-4">
-              <NetworkSwitcher />
               <WalletStatus />
+              <NetworkSwitcher />
             </div>
           </nav>
         </header>
