@@ -57,6 +57,10 @@ export default function BridgePage() {
   const [balanceBaseUnits, setBalanceBaseUnits] = useState<bigint | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [balanceSwitchError, setBalanceSwitchError] = useState<string | null>(
+    null
+  );
+  const [balanceSwitching, setBalanceSwitching] = useState(false);
   const [amountPercent, setAmountPercent] = useState(0);
   const isConnected = Boolean(walletAddress);
   const [balanceSource, setBalanceSource] = useState<"erc20" | "native" | null>(
@@ -210,6 +214,7 @@ export default function BridgePage() {
       setBalanceError(`Switch wallet to ${sourceChainName} to load balance`);
       setBalanceLoading(false);
       setBalanceSource(null);
+      setBalanceSwitchError(null);
       return;
     }
     const token = getUsdcToken(sourceChainId);
@@ -221,8 +226,9 @@ export default function BridgePage() {
     }
     let active = true;
     setBalanceLoading(true);
-    setBalanceError(null);
-    setBalanceSource(null);
+      setBalanceError(null);
+      setBalanceSwitchError(null);
+      setBalanceSource(null);
     const load = async () => {
       const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
       if (!ethereum) {
@@ -519,6 +525,34 @@ export default function BridgePage() {
     setAmount(formatUsdcBaseUnits(balanceBaseUnits));
   };
 
+  const onSwitchWalletToSource = async () => {
+    setBalanceSwitchError(null);
+    const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
+    if (!ethereum) {
+      setBalanceSwitchError("No wallet found");
+      return;
+    }
+    setBalanceSwitching(true);
+    try {
+      await ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: `0x${sourceChainId.toString(16)}` }],
+      });
+    } catch (err) {
+      const code =
+        typeof err === "object" && err && "code" in err
+          ? Number((err as { code?: number }).code)
+          : null;
+      if (code === 4902) {
+        setBalanceSwitchError("Network not available in wallet");
+      } else {
+        setBalanceSwitchError("Failed to switch network");
+      }
+    } finally {
+      setBalanceSwitching(false);
+    }
+  };
+
   return (
     <section className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -618,7 +652,26 @@ export default function BridgePage() {
                 <span>100%</span>
               </div>
               {balanceError ? (
-                <div className="text-[11px] text-amber-700">{balanceError}</div>
+                <div className="space-y-1 text-[11px] text-amber-700">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-amber-400 px-2 py-0.5 text-[11px] text-amber-800"
+                      onClick={onSwitchWalletToSource}
+                      disabled={
+                        !walletChainId ||
+                        walletChainId === sourceChainId ||
+                        balanceSwitching
+                      }
+                    >
+                      {balanceSwitching ? "Switching..." : "Switch wallet"}
+                    </button>
+                    <span>to {sourceChainName} to load balance</span>
+                  </div>
+                  {balanceSwitchError ? (
+                    <div className="text-red-600">{balanceSwitchError}</div>
+                  ) : null}
+                </div>
               ) : balanceSource === "native" ? (
                 <div className="text-[11px] text-amber-700">
                   Using native Arc balance (converted to 6 decimals).
