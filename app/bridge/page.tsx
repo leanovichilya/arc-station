@@ -9,7 +9,7 @@ import {
   getBridgeKit,
   getTokenMessengerV2Address,
 } from "@/lib/bridgeKit";
-import { CHAINS } from "@/lib/chains";
+import { CHAINS, getExplorerTxUrl } from "@/lib/chains";
 import { loadSelectedChain, onSelectedChain } from "@/lib/selectedChain";
 import { getUsdcToken } from "@/lib/tokens";
 import { onWalletState } from "@/lib/walletState";
@@ -53,7 +53,11 @@ export default function BridgePage() {
   const [isHydrated, setIsHydrated] = useState(false);
   const [isBridging, setIsBridging] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
+  const [bridgeErrorDetail, setBridgeErrorDetail] = useState<string | null>(null);
   const [failedStep, setFailedStep] = useState<number | null>(null);
+  const [stepTxs, setStepTxs] = useState<
+    Record<number, { txHash?: string; explorerUrl?: string }>
+  >({});
   const [balanceBaseUnits, setBalanceBaseUnits] = useState<bigint | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
@@ -419,7 +423,14 @@ export default function BridgePage() {
   const onStart = async () => {
     if (!isConnected || isBusy) return;
     setBridgeError(null);
+    setBridgeErrorDetail(null);
     setFailedStep(null);
+    setStepTxs({});
+
+    if (!walletChainId || walletChainId !== sourceChainId) {
+      setBridgeError(`Switch wallet to ${sourceChainName} before bridging`);
+      return;
+    }
 
     const fromChain = getBridgeChainName(sourceChainId);
     const toChain = getBridgeChainName(destChainId);
@@ -464,11 +475,21 @@ export default function BridgePage() {
       method?: string;
       values?: { txHash?: string; explorerUrl?: string };
     }) => {
+      console.info("bridge:event", event);
       const method = event.method;
       if (!method) return;
       if (method === "approve") {
         lastStepIndex = 1;
         setStepIndex(1);
+        if (event.values?.txHash) {
+          setStepTxs((prev) => ({
+            ...prev,
+            0: {
+              txHash: event.values?.txHash,
+              explorerUrl: event.values?.explorerUrl,
+            },
+          }));
+        }
         recordBridgeEvent("approved", intentId, {
           sourceTxHash: event.values?.txHash,
           explorerSourceUrl: event.values?.explorerUrl,
@@ -478,6 +499,15 @@ export default function BridgePage() {
       if (method === "burn") {
         lastStepIndex = 2;
         setStepIndex(2);
+        if (event.values?.txHash) {
+          setStepTxs((prev) => ({
+            ...prev,
+            1: {
+              txHash: event.values?.txHash,
+              explorerUrl: event.values?.explorerUrl,
+            },
+          }));
+        }
         recordBridgeEvent("submitted", intentId, {
           sourceTxHash: event.values?.txHash,
           explorerSourceUrl: event.values?.explorerUrl,
@@ -493,6 +523,15 @@ export default function BridgePage() {
       if (method === "mint") {
         lastStepIndex = steps.length;
         setStepIndex(steps.length);
+        if (event.values?.txHash) {
+          setStepTxs((prev) => ({
+            ...prev,
+            3: {
+              txHash: event.values?.txHash,
+              explorerUrl: event.values?.explorerUrl,
+            },
+          }));
+        }
         recordBridgeEvent("completed", intentId, {
           destTxHash: event.values?.txHash,
           explorerDestUrl: event.values?.explorerUrl,
@@ -510,13 +549,29 @@ export default function BridgePage() {
       if (result?.state === "error") {
         setFailedStep(lastStepIndex);
         setBridgeError("Bridge failed");
+        setBridgeErrorDetail(JSON.stringify(result, null, 2));
         recordBridgeEvent("failed", intentId);
       } else {
         setStepIndex(steps.length);
+        const ethereum = (window as { ethereum?: EthereumProvider }).ethereum;
+        if (ethereum) {
+          try {
+            await ethereum.request({
+              method: "wallet_switchEthereumChain",
+              params: [{ chainId: `0x${sourceChainId.toString(16)}` }],
+            });
+          } catch {}
+        }
       }
     } catch (error) {
+      console.error("bridge:error", error);
       setFailedStep(lastStepIndex);
       setBridgeError("Bridge failed");
+      if (error instanceof Error) {
+        setBridgeErrorDetail(error.message);
+      } else {
+        setBridgeErrorDetail(JSON.stringify(error));
+      }
       recordBridgeEvent("failed", intentId);
     } finally {
       emitter.off?.("*", handleEvent);
@@ -746,7 +801,14 @@ export default function BridgePage() {
                     : "Start bridge"}
             </button>
             {bridgeError ? (
-              <div className="text-xs text-red-600">{bridgeError}</div>
+              <div className="space-y-1 text-xs text-red-600">
+                <div>{bridgeError}</div>
+                {bridgeErrorDetail ? (
+                  <pre className="whitespace-pre-wrap break-words text-[11px] text-red-700">
+                    {bridgeErrorDetail}
+                  </pre>
+                ) : null}
+              </div>
             ) : null}
             <div className="text-xs text-zinc-500">Status: {progressLabel}</div>
           </div>
@@ -804,6 +866,22 @@ export default function BridgePage() {
                     <div className="text-xs text-zinc-500">
                       {step.description}
                     </div>
+                    {stepTxs[index]?.txHash ? (
+                      <a
+                        className="text-[11px] text-zinc-700 underline"
+                        href={
+                          stepTxs[index]?.explorerUrl ??
+                          getExplorerTxUrl(
+                            index < 3 ? sourceChainId : destChainId,
+                            stepTxs[index]?.txHash ?? ""
+                          )
+                        }
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View transaction
+                      </a>
+                    ) : null}
                     <div className="text-[11px] uppercase text-zinc-400">
                       {status}
                     </div>
