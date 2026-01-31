@@ -43,6 +43,7 @@ export default function BridgePage() {
   const storageKey = "arc-bridge-progress";
   const defaultSource = CHAINS[0]?.chainId ?? 0;
   const defaultDest = CHAINS[1]?.chainId ?? defaultSource;
+  const staleMs = 10 * 60 * 1000;
 
   const [sourceChainId, setSourceChainId] = useState(defaultSource);
   const [destChainId, setDestChainId] = useState(defaultDest);
@@ -120,7 +121,29 @@ export default function BridgePage() {
           amount?: string;
           stepIndex?: number | null;
           transferId?: string | null;
+          lastUpdated?: string;
+          stepTxs?: Record<string, { txHash?: string; explorerUrl?: string }>;
         };
+        const lastUpdated = parsed.lastUpdated
+          ? Date.parse(parsed.lastUpdated)
+          : null;
+        const hasAnyTx = parsed.stepTxs
+          ? Object.values(parsed.stepTxs).some((value) => Boolean(value?.txHash))
+          : false;
+        if (
+          parsed.stepIndex !== null &&
+          typeof parsed.stepIndex === "number" &&
+          !hasAnyTx
+        ) {
+          localStorage.removeItem(storageKey);
+          setIsHydrated(true);
+          return;
+        }
+        if (lastUpdated && Date.now() - lastUpdated > staleMs) {
+          localStorage.removeItem(storageKey);
+          setIsHydrated(true);
+          return;
+        }
         if (typeof parsed.sourceChainId === "number") {
           setSourceChainId(parsed.sourceChainId);
         }
@@ -136,6 +159,16 @@ export default function BridgePage() {
         if (typeof parsed.transferId === "string" || parsed.transferId === null) {
           setTransferId(parsed.transferId ?? null);
         }
+        if (parsed.stepTxs) {
+          const normalized: Record<number, { txHash?: string; explorerUrl?: string }> =
+            {};
+          for (const [key, value] of Object.entries(parsed.stepTxs)) {
+            const index = Number(key);
+            if (!Number.isFinite(index)) continue;
+            normalized[index] = value ?? {};
+          }
+          setStepTxs(normalized);
+        }
       } catch {}
     }
     setIsHydrated(true);
@@ -150,6 +183,8 @@ export default function BridgePage() {
       amount,
       stepIndex,
       transferId,
+      lastUpdated: new Date().toISOString(),
+      stepTxs,
     };
     localStorage.setItem(storageKey, JSON.stringify(payload));
   }, [
@@ -157,6 +192,7 @@ export default function BridgePage() {
     destChainId,
     isHydrated,
     sourceChainId,
+    stepTxs,
     stepIndex,
     storageKey,
     transferId,
